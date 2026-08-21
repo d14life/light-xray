@@ -165,7 +165,7 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>13</dd></div>
+      <div><dt>Build</dt><dd>14</dd></div>
     </dl>
     <div class="panel-right">
       <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
@@ -262,7 +262,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 13</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 14</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -299,6 +299,7 @@ function createFluid(canvas){
     // where the case sits in the frame, measured off the shell video
     caseBox:[0.1862,0.1944,0.8021,0.7917],
     caseRadius:0.078,   // aspect-corrected; the case corners are rounded
+    caseFeather:0.060,  // how far past the case edge the white fades in
     sharpen:0.0,      // unsharp mask on the revealed x-ray
     outside:1.0       // 1 = the blob goes white beyond the case edge
   };
@@ -382,7 +383,7 @@ function createFluid(canvas){
       uniform sampler2D uTexture,uVideo;
       uniform float threshold,edgeSoftness,mode,sharpen,outside;
       uniform vec3 inkColor; uniform vec4 caseBox; uniform vec2 vTexel;
-      uniform float caseRadius,aspect;
+      uniform float caseRadius,aspect,caseFeather;
       void main(){
         float d=clamp(length(texture(uTexture,vUv).rgb),0.,1.);
         float a = edgeSoftness>0. ? smoothstep(threshold-edgeSoftness*.5,threshold+edgeSoftness*.5,d)
@@ -405,7 +406,9 @@ function createFluid(canvas){
           vec2 ctr=(lo+hi)*0.5, ext=(hi-lo)*0.5;
           vec2 pd=abs(qa-ctr)-ext+caseRadius;
           float sd=length(max(pd,0.))+min(max(pd.x,pd.y),0.)-caseRadius;
-          float inCase=1.-smoothstep(-0.006,0.006,sd);
+          // ramp outward from the case edge only, so the x-ray inside stays
+          // untouched and there is no hard line where the blob crosses out
+          float inCase=1.-smoothstep(0.0,caseFeather,sd);
           c=mix(mix(v,vec3(1.),outside), v, inCase);   // beyond the case: white ink
         } else c=inkColor;
         fc=vec4(c*a,a);            // premultiplied
@@ -588,6 +591,7 @@ function createFluid(canvas){
     gl.uniform1f(u.outside,P.outside);
     gl.uniform4f(u.caseBox,P.caseBox[0],P.caseBox[1],P.caseBox[2],P.caseBox[3]);
     gl.uniform1f(u.caseRadius,P.caseRadius);
+    gl.uniform1f(u.caseFeather,P.caseFeather);
     gl.uniform1f(u.aspect,width/height);
     gl.uniform2f(u.vTexel,1/(vtexW||1280),1/(vtexH||720));
     gl.uniform3f(u.inkColor,1,1,1);
@@ -746,7 +750,7 @@ function createFluid(canvas){
     lastInput=performance.now(); everMoved=true;
   };
   let lastInput=-1e9, everMoved=false, idleT0=-1, lastPass=-1;
-  const leg={ax:-0.16,bx:1.16,ay:0.47,by:0.47};
+  const leg={ax:-0.16,bx:1.16,ay:0.47,by:0.47,cx:0.5,cy:0.47,size:1,ez:2};
   window.addEventListener('pointermove',(e)=>onMove(e.clientX,e.clientY),{passive:true});
   window.addEventListener('pointerdown',(e)=>onMove(e.clientX,e.clientY),{passive:true});
 
@@ -864,7 +868,8 @@ function createFluid(canvas){
     }
 
     // idle: cross the sign on its own, at whatever the sliders say
-    if(P.dir!=='off' && (now-lastInput)>(everMoved?P.wait:700)){
+    const idleDriving = P.dir!=='off' && (now-lastInput)>(everMoved?P.wait:700);
+    if(idleDriving){
       if(idleT0<0){ idleT0=now; lastPass=-1; }
       const CROSS=P.cross, LEG=CROSS+P.gap;
       const span=(P.dir==='bounce')?LEG*2:LEG;
@@ -874,19 +879,50 @@ function createFluid(canvas){
       if(pass!==lastPass){
         lastPass=pass;
         if(P.dir!=='bounce'){ M.seen=false; M.laid=false; }   // do not join across the jump
-        if(P.dir==='random'){                       // a fresh diagonal every pass
-          const sp=P.spread/100, c=P.line/100, s=Math.random()<0.5?1:-1;
-          leg.ax = s>0?-0.16:1.16;  leg.bx = s>0?1.16:-0.16;
-          leg.ay = c+(Math.random()-0.5)*sp;
-          leg.by = c+(Math.random()-0.5)*sp;
+        if(P.dir==='random'){
+          /* Every pass is freshly rolled: which edge it enters and leaves by,
+             how much the path bows, how fat the blob is, and how it accelerates.
+             Spread is the wildness dial — at 0 it degenerates to a flat
+             left-to-right crossing, at full it can come in off any edge. */
+          const R=Math.random, w=P.spread/100, c=P.line/100;
+          const sideOf=()=>{
+            if(R()>Math.min(1,w)) return R()<0.5?0:1;       // tame: left or right
+            return Math.floor(R()*4);
+          };
+          const ptOn=(sd)=>{
+            const u=0.10+R()*0.80;
+            if(sd===0) return [-0.18,u];
+            if(sd===1) return [ 1.18,u];
+            if(sd===2) return [u,-0.18];
+            return [u,1.18];
+          };
+          let s0=sideOf(), s1=sideOf();
+          if(s1===s0) s1=(s0+1+Math.floor(R()*3))%4;         // never the same edge
+          const A=ptOn(s0), B=ptOn(s1);
+          // pull the vertical spread back toward the Height line when tame
+          leg.ax=A[0]; leg.bx=B[0];
+          leg.ay=c+(A[1]-c)*Math.max(0.12,w);
+          leg.by=c+(B[1]-c)*Math.max(0.12,w);
+          // bow the path off the straight line
+          leg.cx=(leg.ax+leg.bx)/2+(R()-0.5)*1.10*w;
+          leg.cy=(leg.ay+leg.by)/2+(R()-0.5)*0.70*w;
+          leg.size=Math.max(0.35,1+(R()-0.5)*1.15*w);        // shape changes pass to pass
+          leg.ez=1.25+R()*1.75;                              // and so does the acceleration
         }
       }
 
       let x=null,y=P.line/100;
       if(e<CROSS){
-        const k=ease(e/CROSS);
-        if(P.dir==='random'){ x=leg.ax+(leg.bx-leg.ax)*k; y=leg.ay+(leg.by-leg.ay)*k; }
-        else { x=-0.16+1.32*k; if(P.dir==='lr') y+=0.05*Math.sin(pass*1.7); }
+        const u=e/CROSS;
+        if(P.dir==='random'){
+          const k=u<0.5?Math.pow(2*u,leg.ez)/2:1-Math.pow(2*(1-u),leg.ez)/2;
+          const m=1-k;                               // quadratic bezier: bowed, not straight
+          x=m*m*leg.ax+2*m*k*leg.cx+k*k*leg.bx;
+          y=m*m*leg.ay+2*m*k*leg.cy+k*k*leg.by;
+        } else {
+          const k=ease(u);
+          x=-0.16+1.32*k; if(P.dir==='lr') y+=0.05*Math.sin(pass*1.7);
+        }
       } else if(P.dir==='bounce' && e>=LEG && e<LEG+CROSS){
         x=1.16-1.32*ease((e-LEG)/CROSS);            // and back again
       }
@@ -897,6 +933,7 @@ function createFluid(canvas){
       lastInput=-1e9;                        // stay in idle
     }
 
+    fluid.P.splatRadius=(P.size/100)*(idleDriving?leg.size:1);
     if(M.moved){
       if(M.laid) fluid.splatLine(M.px,M.py,M.x,M.y,M.vx,M.vy);
       else fluid.splat(M.x,M.y,M.vx,M.vy);
