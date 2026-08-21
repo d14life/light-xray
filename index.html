@@ -164,8 +164,9 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>18</dd></div>
+      <div><dt>Build</dt><dd>19</dd></div>
       <div><dt>Mask</dt><dd id="rMask">&mdash;</dd></div>
+      <div><dt>Idle</dt><dd id="rIdle">&mdash;</dd></div>
     </dl>
     <div class="panel-right">
       <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
@@ -268,7 +269,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 18</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 19</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -703,7 +704,7 @@ function createFluid(canvas){
                {dye:1024,sim:256,iters:40,fps:60}];
   let sharpPct=100;                          // render scale, independent of tier
   let tier=1, autoQ=true;
-  try{ const v=localStorage.getItem('light.v9.q'); if(v!==null){ autoQ=(v==='auto'); if(!autoQ) tier=+v; } }catch(e){}
+  try{ const v=localStorage.getItem('light.v18.q'); if(v!==null){ autoQ=(v==='auto'); if(!autoQ) tier=+v; } }catch(e){}
 
   /* A rectangle cannot describe this case — it has rounded corners and two
      feet below the body. Trace the silhouette straight off a shell frame.
@@ -849,7 +850,7 @@ function createFluid(canvas){
             ['twins','uTwins','vTwins'],
             ['back','uBack','vBack'],['sharp','uSharp','vSharp'],
             ['sharpen','uSharpen','vSharpen'],['outside','uOutside','vOutside']];
-  const store=(k,v)=>{ try{ localStorage.setItem('light.v9.'+k,v); }catch(e){} };
+  const store=(k,v)=>{ try{ localStorage.setItem('light.v18.'+k,v); }catch(e){} };
   const apply=()=>{
     stage.classList.toggle('invert',P.mode===0);
     $('mReveal').setAttribute('aria-pressed',String(P.mode===1));
@@ -871,10 +872,10 @@ function createFluid(canvas){
   };
   const paint=()=>{ UI.forEach(([k,i,o])=>{ $(i).value=P[k]; $(o).textContent=P[k]; }); apply(); };
   UI.forEach(([k,i,o])=>{
-    try{ const v=localStorage.getItem('light.v9.'+k); if(v!==null) P[k]=+v; }catch(e){}
+    try{ const v=localStorage.getItem('light.v18.'+k); if(v!==null) P[k]=+v; }catch(e){}
     $(i).addEventListener('input',(e)=>{ P[k]=+e.target.value; $(o).textContent=P[k]; store(k,P[k]); apply(); });
   });
-  try{ const v=localStorage.getItem('light.v9.mode'); if(v!==null) P.mode=+v; }catch(e){}
+  try{ const v=localStorage.getItem('light.v18.mode'); if(v!==null) P.mode=+v; }catch(e){}
   $('mReveal').addEventListener('click',()=>{ P.mode=1; store('mode',1); apply(); });
   $('mInvert').addEventListener('click',()=>{ P.mode=0; store('mode',0); apply(); });
   const qPaint=()=>{
@@ -896,7 +897,7 @@ function createFluid(canvas){
   const setOpen=(on)=>{
     tuneEl.hidden=!on;
     adjBtn.setAttribute('aria-expanded',String(on));
-    try{ localStorage.setItem('light.v9.open',on?'1':'0'); }catch(e){}
+    try{ localStorage.setItem('light.v18.open',on?'1':'0'); }catch(e){}
   };
   adjBtn.addEventListener('click',()=>{
     const opening=tuneEl.hidden;
@@ -906,13 +907,13 @@ function createFluid(canvas){
       if(r.bottom>innerHeight) tuneEl.scrollIntoView({block:'end',behavior:'smooth'});
     });
   });
-  (()=>{ let o='0'; try{ o=localStorage.getItem('light.v9.open')||'0'; }catch(e){}
+  (()=>{ let o='0'; try{ o=localStorage.getItem('light.v18.open')||'0'; }catch(e){}
          setOpen(o==='1'); })();
 
   const DIRS=[['dRandom','random'],['dLR','lr'],['dBounce','bounce'],['dOff','off']];
   const dPaint=()=>DIRS.forEach(([id,v])=>$(id).setAttribute('aria-pressed',String(P.dir===v)));
   const dSet=(d)=>{ P.dir=d; store('dir',d); idleT0=-1; lastPass=-1; dPaint(); };
-  try{ const v=localStorage.getItem('light.v9.dir'); if(v) P.dir=v; }catch(e){}
+  try{ const v=localStorage.getItem('light.v18.dir'); if(v) P.dir=v; }catch(e){}
   DIRS.forEach(([id,v])=>$(id).addEventListener('click',()=>dSet(v)));
   dPaint();
 
@@ -1045,6 +1046,8 @@ function createFluid(canvas){
     ry.textContent=(100*M.y/(H*dpr)).toFixed(1);
     rf.textContent=Math.hypot(M.vx,M.vy).toFixed(0);
     const mk=$('rMask'); if(mk) mk.textContent=maskDone?'on':'…';
+    const ml=$('rIdle');
+    if(ml) ml.textContent=P.dir+(P.dir==='random'?(leg.ax<0?' →':' ←')+(leg.twin?' x2':''):'');
   };
   requestAnimationFrame(frame);
 
