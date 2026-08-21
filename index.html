@@ -164,7 +164,7 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>15</dd></div>
+      <div><dt>Build</dt><dd>16</dd></div>
     </dl>
     <div class="panel-right">
       <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
@@ -222,6 +222,8 @@
         <button id="qHigh" type="button" aria-pressed="false">High</button>
         <button id="qLow"  type="button" aria-pressed="false">Low</button>
       </div>
+      <label><span class="lab">Backdrop <b id="vBack">0</b></span>
+        <input type="range" id="uBack" min="0" max="40" value="0"></label>
       <label><span class="lab">Sharpness <b id="vSharp">100</b></span>
         <input type="range" id="uSharp" min="50" max="200" step="5" value="100"></label>
       <label><span class="lab">Sharpen <b id="vSharpen">35</b></span>
@@ -263,7 +265,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 15</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 16</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -644,10 +646,10 @@ function createFluid(canvas){
       const full=a>0.995 && b>0.995;
       const playable=shell.readyState>=4 && inner.readyState>=4;
       const waited=performance.now()-t0;
-      if(full || (playable && waited>20000) || waited>60000){ ensurePlaying(); finishBoot(); return; }
+      if(full || (playable && waited>20000) || waited>60000){ ensurePlaying(); tryMask(); finishBoot(); return; }
       setTimeout(tick,120);
     };
-    tick();
+    setTimeout(tick,0);          // let the rest of the module finish defining first
   };
 
   /* ---------------- playback ----------------
@@ -789,7 +791,8 @@ function createFluid(canvas){
 
   /* ---------------- controls ---------------- */
   const DEFAULTS={size:30, trail:95, swirl:50, force:85, edge:0,
-                  cross:1800, gap:400, line:47, wait:1200, spread:55, taper:70, sharp:100,
+                  cross:1800, gap:400, line:47, wait:1200, spread:55, taper:70,
+                  back:0, sharp:100,
                   sharpen:35, outside:100,
                   mode:1, dir:'random'};
   const P={...DEFAULTS};
@@ -798,13 +801,16 @@ function createFluid(canvas){
             ['cross','uCross','vCross'],['gap','uGap','vGap'],
             ['line','uLine','vLine'],['wait','uWait','vWait'],
             ['spread','uSpread','vSpread'],['taper','uTaper','vTaper'],
-            ['sharp','uSharp','vSharp'],
+            ['back','uBack','vBack'],['sharp','uSharp','vSharp'],
             ['sharpen','uSharpen','vSharpen'],['outside','uOutside','vOutside']];
   const store=(k,v)=>{ try{ localStorage.setItem('light.v9.'+k,v); }catch(e){} };
   const apply=()=>{
     stage.classList.toggle('invert',P.mode===0);
     $('mReveal').setAttribute('aria-pressed',String(P.mode===1));
     $('mInvert').setAttribute('aria-pressed',String(P.mode===0));
+    const bk='rgb('+P.back+','+P.back+','+P.back+')';
+    document.documentElement.style.setProperty('--void',bk);
+    stage.style.background=bk;
     if(P.sharp!==sharpPct){ sharpPct=P.sharp; resize(false); }
     if(!fluid) return;
     fluid.P.splatRadius          = P.size/100;
