@@ -164,7 +164,7 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>17</dd></div>
+      <div><dt>Build</dt><dd>18</dd></div>
       <div><dt>Mask</dt><dd id="rMask">&mdash;</dd></div>
     </dl>
     <div class="panel-right">
@@ -204,6 +204,8 @@
         <input type="range" id="uSpread" min="0" max="140" value="55"></label>
       <label><span class="lab">Droplet <b id="vTaper">70</b></span>
         <input type="range" id="uTaper" min="0" max="100" value="70"></label>
+      <label><span class="lab">Twins <b id="vTwins">35</b></span>
+        <input type="range" id="uTwins" min="0" max="100" value="35"></label>
       <div class="seg">
         <button id="dRandom" type="button" aria-pressed="true">Random</button>
         <button id="dLR"     type="button" aria-pressed="false">L&rarr;R</button>
@@ -266,7 +268,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 17</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 18</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -826,13 +828,15 @@ function createFluid(canvas){
     lastInput=performance.now(); everMoved=true;
   };
   let lastInput=-1e9, everMoved=false, idleT0=-1, lastPass=-1;
-  const leg={ax:-0.16,bx:1.16,ay:0.47,by:0.47,cx:0.5,cy:0.47,size:1,ez:2};
+  const leg ={ax:-0.18,bx:1.18,ay:0.47,by:0.47,cx:0.5,cy:0.47,size:1,ez:2,twin:false};
+  const leg2={ax: 1.18,bx:-0.18,ay:0.47,by:0.47,cx:0.5,cy:0.47,size:1,ez:2};
+  const G={x:0,y:0,px:0,py:0,vx:0,vy:0,seen:false,laid:false,on:false};
   window.addEventListener('pointermove',(e)=>onMove(e.clientX,e.clientY),{passive:true});
   window.addEventListener('pointerdown',(e)=>onMove(e.clientX,e.clientY),{passive:true});
 
   /* ---------------- controls ---------------- */
   const DEFAULTS={size:30, trail:95, swirl:50, force:85, edge:0,
-                  cross:1800, gap:400, line:47, wait:1200, spread:55, taper:70,
+                  cross:1800, gap:400, line:47, wait:1200, spread:55, taper:70, twins:35,
                   back:0, sharp:100,
                   sharpen:35, outside:100,
                   mode:1, dir:'random'};
@@ -842,6 +846,7 @@ function createFluid(canvas){
             ['cross','uCross','vCross'],['gap','uGap','vGap'],
             ['line','uLine','vLine'],['wait','uWait','vWait'],
             ['spread','uSpread','vSpread'],['taper','uTaper','vTaper'],
+            ['twins','uTwins','vTwins'],
             ['back','uBack','vBack'],['sharp','uSharp','vSharp'],
             ['sharpen','uSharpen','vSharpen'],['outside','uOutside','vOutside']];
   const store=(k,v)=>{ try{ localStorage.setItem('light.v9.'+k,v); }catch(e){} };
@@ -920,6 +925,22 @@ function createFluid(canvas){
   paint();
 
   /* ---------------- loop ---------------- */
+
+  const rollLeg=(L,rev)=>{
+    const R=Math.random, w=P.spread/100, c=P.line/100;
+    const lim=(v)=>Math.max(0.06,Math.min(0.94,v));
+    L.ax=rev?1.18:-0.18; L.bx=rev?-0.18:1.18;      // either way across
+    L.ay=lim(c+(R()-0.5)*w);
+    L.by=lim(c+(R()-0.5)*w);
+    L.cx=0.5;
+    L.cy=lim((L.ay+L.by)/2+(R()-0.5)*0.22*w);      // a gentle bow only
+    L.ez=1.35+R()*0.85;
+  };
+  const legAt=(L,u)=>{
+    const k=u<0.5?Math.pow(2*u,L.ez)/2:1-Math.pow(2*(1-u),L.ez)/2;
+    const m=1-k;
+    return [m*m*L.ax+2*m*k*L.cx+k*k*L.bx, m*m*L.ay+2*m*k*L.cy+k*k*L.by];
+  };
   const t0=performance.now();
   let last=t0, ft=0, fc=0, good=0;
   let lastDraw=0, headMul=1;
@@ -961,18 +982,17 @@ function createFluid(canvas){
         lastPass=pass;
         if(P.dir!=='bounce'){ M.seen=false; M.laid=false; }   // do not join across the jump
         if(P.dir==='random'){
-          /* Always a diagonal crossing from the left. What varies is how far
-             up or down it enters and leaves — so it runs up on one pass and
-             down the next. Spread sets how steep those diagonals get. */
-          const R=Math.random, w=P.spread/100, c=P.line/100;
-          const lim=(v)=>Math.max(0.06,Math.min(0.94,v));
-          leg.ax=-0.18; leg.bx=1.18;
-          leg.ay=lim(c+(R()-0.5)*w);
-          leg.by=lim(c+(R()-0.5)*w);
-          leg.cx=0.5;
-          leg.cy=lim((leg.ay+leg.by)/2+(R()-0.5)*0.22*w);    // a gentle bow only
-          leg.size=1;
-          leg.ez=1.35+R()*0.85;
+          /* A diagonal crossing, entering from either side. Sometimes two at
+             once, usually crossing each other. Spread sets how steep the
+             diagonals get, Twins how often the second one shows up. */
+          const rev=Math.random()<0.5;
+          rollLeg(leg,rev); leg.size=1;
+          leg.twin = Math.random()*100 < P.twins;
+          if(leg.twin){
+            rollLeg(leg2, Math.random()<0.75 ? !rev : rev);   // usually opposed
+            leg2.size=1;
+          }
+          G.seen=false; G.laid=false; G.on=false;
         }
       }
 
@@ -981,17 +1001,22 @@ function createFluid(canvas){
         const u=e/CROSS;
         headMul=1+(P.taper/100)*(-0.72+1.95*u);
         if(P.dir==='random'){
-          const k=u<0.5?Math.pow(2*u,leg.ez)/2:1-Math.pow(2*(1-u),leg.ez)/2;
-          const m=1-k;                               // quadratic bezier: bowed, not straight
-          x=m*m*leg.ax+2*m*k*leg.cx+k*k*leg.bx;
-          y=m*m*leg.ay+2*m*k*leg.cy+k*k*leg.by;
+          const A=legAt(leg,u); x=A[0]; y=A[1];
+          if(leg.twin){                              // the second one, in parallel
+            const B=legAt(leg2,u);
+            const r2=stage.getBoundingClientRect();
+            const gx=(r2.left+r2.width*B[0]-r2.left)*dpr;
+            const gy=(r2.height*Math.max(0.02,Math.min(0.98,B[1])))*dpr;
+            if(G.seen){ const f=P.force/10; G.vx=(gx-G.x)*f; G.vy=(gy-G.y)*f; }
+            G.x=gx; G.y=gy; G.seen=true; G.on=true;
+          }
         } else {
           const k=ease(u);
           x=-0.16+1.32*k; if(P.dir==='lr') y+=0.05*Math.sin(pass*1.7);
         }
       } else if(P.dir==='bounce' && e>=LEG && e<LEG+CROSS){
         x=1.16-1.32*ease((e-LEG)/CROSS);            // and back again
-      }
+      } else { G.on=false; }
       if(x!==null){
         const r=stage.getBoundingClientRect();
         onMove(r.left+r.width*x, r.top+r.height*Math.max(0.02,Math.min(0.98,y)));
@@ -1006,6 +1031,11 @@ function createFluid(canvas){
       if(M.laid) fluid.splatLine(M.px,M.py,M.x,M.y,M.vx,M.vy);
       else fluid.splat(M.x,M.y,M.vx,M.vy);
       M.px=M.x; M.py=M.y; M.laid=true; M.moved=false;
+    }
+    if(idleDriving && G.on){
+      if(G.laid) fluid.splatLine(G.px,G.py,G.x,G.y,G.vx,G.vy);
+      else fluid.splat(G.x,G.y,G.vx,G.vy);
+      G.px=G.x; G.py=G.y; G.laid=true;
     }
     fluid.simulate(dt);
     fluid.render(inner, videoDirty);
