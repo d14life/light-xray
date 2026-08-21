@@ -164,7 +164,8 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>16</dd></div>
+      <div><dt>Build</dt><dd>17</dd></div>
+      <div><dt>Mask</dt><dd id="rMask">&mdash;</dd></div>
     </dl>
     <div class="panel-right">
       <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
@@ -265,7 +266,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 16</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 17</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -703,32 +704,72 @@ function createFluid(canvas){
   try{ const v=localStorage.getItem('light.v9.q'); if(v!==null){ autoQ=(v==='auto'); if(!autoQ) tier=+v; } }catch(e){}
 
   /* A rectangle cannot describe this case — it has rounded corners and two
-     feet below the body. Trace the silhouette straight off a shell frame
-     instead. The case never moves, so once is enough. */
+     feet below the body. Trace the silhouette straight off a shell frame.
+
+     Two products come out of it: a luminance mask for the shader (so the blob
+     knows where the case ends), and an alpha mask applied to the shell video
+     itself. That second one matters — the video's surround is a true 0 in the
+     data, but the display path paints video black lighter than CSS black, so
+     the stage showed as a lighter rectangle against the page. Masking the
+     video to the case means that surround is never painted at all. */
+  let maskDone=false;
   const buildCaseMask=()=>{
-    if(!fluid || shell.readyState<2 || !shell.videoWidth) return false;
+    if(maskDone) return true;
+    if(!fluid || shell.readyState<2 || !shell.videoWidth || !shell.videoHeight) return false;
     const w=512, h=Math.max(2,Math.round(512*shell.videoHeight/shell.videoWidth));
     const a=document.createElement('canvas'); a.width=w; a.height=h;
     const ax=a.getContext('2d',{willReadFrequently:true});
-    try{ ax.drawImage(shell,0,0,w,h); }catch(e){ return false; }
-    const img=ax.getImageData(0,0,w,h), q=img.data;
+    let img;
+    try{ ax.drawImage(shell,0,0,w,h); img=ax.getImageData(0,0,w,h); }
+    catch(e){ return false; }
+    const q=img.data;
     let lit=0;
     for(let i=0;i<q.length;i+=4){
-      const on=Math.max(q[i],q[i+1],q[i+2])>18?255:0;
+      const on=Math.max(q[i],q[i+1],q[i+2])>18;
       if(on) lit++;
-      q[i]=q[i+1]=q[i+2]=on; q[i+3]=255;
+      const v=on?255:0;
+      q[i]=q[i+1]=q[i+2]=v; q[i+3]=255;
     }
-    if(lit < w*h*0.05) return false;            // nothing decoded yet
+    if(lit < w*h*0.05) return false;               // frame not decoded yet
     ax.putImageData(img,0,0);
-    const b=document.createElement('canvas'); b.width=w; b.height=h;
-    const bx=b.getContext('2d');
-    bx.filter='blur(5px)';                      // soften the edge
-    bx.drawImage(a,0,0);
-    fluid.setCaseMask(b);
+
+    const soft=document.createElement('canvas'); soft.width=w; soft.height=h;
+    const sx=soft.getContext('2d');
+    sx.filter='blur(5px)'; sx.drawImage(a,0,0);
+    fluid.setCaseMask(soft);
+
+    // the same silhouette again, this time carried in the alpha channel
+    const am=document.createElement('canvas'); am.width=w; am.height=h;
+    const amx=am.getContext('2d');
+    const ai=amx.createImageData(w,h);
+    for(let i=0;i<q.length;i+=4){
+      ai.data[i]=255; ai.data[i+1]=255; ai.data[i+2]=255;
+      ai.data[i+3]=q[i]>128?255:0;
+    }
+    amx.putImageData(ai,0,0);
+    const blur=document.createElement('canvas'); blur.width=w; blur.height=h;
+    const bx=blur.getContext('2d');
+    bx.filter='blur(3px)'; bx.drawImage(am,0,0);
+    try{
+      const url='url('+blur.toDataURL('image/png')+')';
+      shell.style.webkitMaskImage=shell.style.maskImage=url;
+      shell.style.webkitMaskSize=shell.style.maskSize='100% 100%';
+      shell.style.webkitMaskRepeat=shell.style.maskRepeat='no-repeat';
+      shell.style.webkitMaskPosition=shell.style.maskPosition='center';
+    }catch(e){}
+    maskDone=true;
     return true;
   };
+  /* Keep after it until it lands. The old version gave up after ten seconds,
+     which is nothing next to a 4K download — so the mask was never built and
+     the blob never went white beyond the case. */
   let maskTries=0;
-  const tryMask=()=>{ if(buildCaseMask()||++maskTries>25) return; setTimeout(tryMask,400); };
+  const tryMask=()=>{
+    if(buildCaseMask() || ++maskTries>600) return;
+    setTimeout(tryMask,500);
+  };
+  ['loadeddata','canplay','canplaythrough','playing','seeked']
+    .forEach(ev=>shell.addEventListener(ev,()=>{ if(!maskDone) buildCaseMask(); }));
 
   let W=0,H=0,dpr=1;
   const resize=(force)=>{
@@ -973,6 +1014,7 @@ function createFluid(canvas){
     rx.textContent=(100*M.x/(W*dpr)).toFixed(1);
     ry.textContent=(100*M.y/(H*dpr)).toFixed(1);
     rf.textContent=Math.hypot(M.vx,M.vy).toFixed(0);
+    const mk=$('rMask'); if(mk) mk.textContent=maskDone?'on':'…';
   };
   requestAnimationFrame(frame);
 
