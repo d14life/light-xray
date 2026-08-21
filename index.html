@@ -1,7 +1,7 @@
 <title>LIGHT X-Ray</title>
 <style>
   :root{
-    --void:#050607; --void-lift:#0c0f11;
+    --void:#000000; --void-lift:#0c0f11;
     --steel:#8c979d; --steel-dim:#4a5257;
     --neon:#78f0ff; --neon-deep:#16626f;
     --mono: ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
@@ -24,8 +24,7 @@
               color:var(--steel-dim);text-wrap:balance}
 
   .stage{position:relative;width:min(96vw,1180px,calc(56svh * 16 / 9));aspect-ratio:16/9;background:#000;
-         overflow:hidden;cursor:none;touch-action:none;border-radius:2px;
-         box-shadow:0 0 0 1px rgba(140,151,157,.10), 0 2rem 5rem -1.5rem rgba(0,0,0,.9)}
+         overflow:hidden;cursor:none;touch-action:none;border-radius:0}
 
   /* The shell is an ordinary video on its own GPU layer and is never touched.
      The x-ray is uploaded to WebGL as a texture and comes back through the
@@ -165,7 +164,7 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>14</dd></div>
+      <div><dt>Build</dt><dd>15</dd></div>
     </dl>
     <div class="panel-right">
       <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
@@ -202,6 +201,8 @@
         <input type="range" id="uWait" min="0" max="12000" step="100" value="1200"></label>
       <label><span class="lab">Spread <b id="vSpread">55</b></span>
         <input type="range" id="uSpread" min="0" max="140" value="55"></label>
+      <label><span class="lab">Droplet <b id="vTaper">70</b></span>
+        <input type="range" id="uTaper" min="0" max="100" value="70"></label>
       <div class="seg">
         <button id="dRandom" type="button" aria-pressed="true">Random</button>
         <button id="dLR"     type="button" aria-pressed="false">L&rarr;R</button>
@@ -262,7 +263,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 14</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 15</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -297,9 +298,7 @@ function createFluid(canvas){
     forceStrength:8.5, pressureDecay:0.75, threshold:1.0, edgeSoftness:0.0,
     mode:1,
     // where the case sits in the frame, measured off the shell video
-    caseBox:[0.1862,0.1944,0.8021,0.7917],
-    caseRadius:0.078,   // aspect-corrected; the case corners are rounded
-    caseFeather:0.060,  // how far past the case edge the white fades in
+    caseFeather:0.26,   // softness of the case-edge ramp, in mask units
     sharpen:0.0,      // unsharp mask on the revealed x-ray
     outside:1.0       // 1 = the blob goes white beyond the case edge
   };
@@ -382,8 +381,8 @@ function createFluid(canvas){
     display: prog(`${H}
       uniform sampler2D uTexture,uVideo;
       uniform float threshold,edgeSoftness,mode,sharpen,outside;
-      uniform vec3 inkColor; uniform vec4 caseBox; uniform vec2 vTexel;
-      uniform float caseRadius,aspect,caseFeather;
+      uniform vec3 inkColor; uniform vec2 vTexel;
+      uniform float caseFeather; uniform sampler2D uCaseMask;
       void main(){
         float d=clamp(length(texture(uTexture,vUv).rgb),0.,1.);
         float a = edgeSoftness>0. ? smoothstep(threshold-edgeSoftness*.5,threshold+edgeSoftness*.5,d)
@@ -399,16 +398,10 @@ function createFluid(canvas){
                    +texture(uVideo,q-vec2(0.,vTexel.y)).rgb)*0.25;
             v=clamp(v+(v-b)*sharpen,0.,1.);
           }
-          // rounded-box SDF in aspect-corrected space, so the white follows
-          // the case's real silhouette instead of leaving corner wedges
-          vec2 qa=vec2(q.x*aspect,q.y);
-          vec2 lo=vec2(caseBox.x*aspect,caseBox.y), hi=vec2(caseBox.z*aspect,caseBox.w);
-          vec2 ctr=(lo+hi)*0.5, ext=(hi-lo)*0.5;
-          vec2 pd=abs(qa-ctr)-ext+caseRadius;
-          float sd=length(max(pd,0.))+min(max(pd.x,pd.y),0.)-caseRadius;
-          // ramp outward from the case edge only, so the x-ray inside stays
-          // untouched and there is no hard line where the blob crosses out
-          float inCase=1.-smoothstep(0.0,caseFeather,sd);
+          // the mask is the case's own silhouette, traced off a shell frame,
+          // so the rounded corners and the feet are all accounted for
+          float m=texture(uCaseMask,q).r;
+          float inCase=smoothstep(0.5-caseFeather,0.5+caseFeather,m);
           c=mix(mix(v,vec3(1.),outside), v, inCase);   // beyond the case: white ink
         } else c=inkColor;
         fc=vec4(c*a,a);            // premultiplied
@@ -476,6 +469,19 @@ function createFluid(canvas){
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));
+
+  /* the case silhouette, uploaded once — the case does not move */
+  const cmask=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,cmask);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([255,255,255,255]));
+  const setCaseMask=(src)=>{
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D,cmask);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+  };
 
   /* ---------------- the package's splat, in device pixels ---------------- */
   const splat=(x,y,vxp,vyp)=>{
@@ -589,16 +595,15 @@ function createFluid(canvas){
     gl.uniform1f(u.mode,P.mode);
     gl.uniform1f(u.sharpen,P.sharpen);
     gl.uniform1f(u.outside,P.outside);
-    gl.uniform4f(u.caseBox,P.caseBox[0],P.caseBox[1],P.caseBox[2],P.caseBox[3]);
-    gl.uniform1f(u.caseRadius,P.caseRadius);
     gl.uniform1f(u.caseFeather,P.caseFeather);
-    gl.uniform1f(u.aspect,width/height);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D,cmask);
+    gl.uniform1i(u.uCaseMask,3);
     gl.uniform2f(u.vTexel,1/(vtexW||1280),1/(vtexH||720));
     gl.uniform3f(u.inkColor,1,1,1);
     pass(null);
   };
 
-  return {P,setSize,splat,splatLine,simulate,render,rebuild:build,
+  return {P,setSize,splat,splatLine,simulate,render,rebuild:build,setCaseMask,
           size:()=>({width,height,sim:simSize,dye:dyeSize})};
 }
 </script>
@@ -695,6 +700,34 @@ function createFluid(canvas){
   let tier=1, autoQ=true;
   try{ const v=localStorage.getItem('light.v9.q'); if(v!==null){ autoQ=(v==='auto'); if(!autoQ) tier=+v; } }catch(e){}
 
+  /* A rectangle cannot describe this case — it has rounded corners and two
+     feet below the body. Trace the silhouette straight off a shell frame
+     instead. The case never moves, so once is enough. */
+  const buildCaseMask=()=>{
+    if(!fluid || shell.readyState<2 || !shell.videoWidth) return false;
+    const w=512, h=Math.max(2,Math.round(512*shell.videoHeight/shell.videoWidth));
+    const a=document.createElement('canvas'); a.width=w; a.height=h;
+    const ax=a.getContext('2d',{willReadFrequently:true});
+    try{ ax.drawImage(shell,0,0,w,h); }catch(e){ return false; }
+    const img=ax.getImageData(0,0,w,h), q=img.data;
+    let lit=0;
+    for(let i=0;i<q.length;i+=4){
+      const on=Math.max(q[i],q[i+1],q[i+2])>18?255:0;
+      if(on) lit++;
+      q[i]=q[i+1]=q[i+2]=on; q[i+3]=255;
+    }
+    if(lit < w*h*0.05) return false;            // nothing decoded yet
+    ax.putImageData(img,0,0);
+    const b=document.createElement('canvas'); b.width=w; b.height=h;
+    const bx=b.getContext('2d');
+    bx.filter='blur(5px)';                      // soften the edge
+    bx.drawImage(a,0,0);
+    fluid.setCaseMask(b);
+    return true;
+  };
+  let maskTries=0;
+  const tryMask=()=>{ if(buildCaseMask()||++maskTries>25) return; setTimeout(tryMask,400); };
+
   let W=0,H=0,dpr=1;
   const resize=(force)=>{
     const r=stage.getBoundingClientRect();
@@ -756,7 +789,7 @@ function createFluid(canvas){
 
   /* ---------------- controls ---------------- */
   const DEFAULTS={size:30, trail:95, swirl:50, force:85, edge:0,
-                  cross:1800, gap:400, line:47, wait:1200, spread:55, sharp:100,
+                  cross:1800, gap:400, line:47, wait:1200, spread:55, taper:70, sharp:100,
                   sharpen:35, outside:100,
                   mode:1, dir:'random'};
   const P={...DEFAULTS};
@@ -764,7 +797,8 @@ function createFluid(canvas){
             ['force','uForce','vForce'],['edge','uEdge','vEdge'],
             ['cross','uCross','vCross'],['gap','uGap','vGap'],
             ['line','uLine','vLine'],['wait','uWait','vWait'],
-            ['spread','uSpread','vSpread'],['sharp','uSharp','vSharp'],
+            ['spread','uSpread','vSpread'],['taper','uTaper','vTaper'],
+            ['sharp','uSharp','vSharp'],
             ['sharpen','uSharpen','vSharpen'],['outside','uOutside','vOutside']];
   const store=(k,v)=>{ try{ localStorage.setItem('light.v9.'+k,v); }catch(e){} };
   const apply=()=>{
@@ -841,7 +875,7 @@ function createFluid(canvas){
   /* ---------------- loop ---------------- */
   const t0=performance.now();
   let last=t0, ft=0, fc=0, good=0;
-  let lastDraw=0;
+  let lastDraw=0, headMul=1;
   const frame=(now)=>{
     requestAnimationFrame(frame);
     if(!W||!H){ resize(); if(!W||!H) return; }
@@ -880,40 +914,25 @@ function createFluid(canvas){
         lastPass=pass;
         if(P.dir!=='bounce'){ M.seen=false; M.laid=false; }   // do not join across the jump
         if(P.dir==='random'){
-          /* Every pass is freshly rolled: which edge it enters and leaves by,
-             how much the path bows, how fat the blob is, and how it accelerates.
-             Spread is the wildness dial — at 0 it degenerates to a flat
-             left-to-right crossing, at full it can come in off any edge. */
+          /* Always a diagonal crossing from the left. What varies is how far
+             up or down it enters and leaves — so it runs up on one pass and
+             down the next. Spread sets how steep those diagonals get. */
           const R=Math.random, w=P.spread/100, c=P.line/100;
-          const sideOf=()=>{
-            if(R()>Math.min(1,w)) return R()<0.5?0:1;       // tame: left or right
-            return Math.floor(R()*4);
-          };
-          const ptOn=(sd)=>{
-            const u=0.10+R()*0.80;
-            if(sd===0) return [-0.18,u];
-            if(sd===1) return [ 1.18,u];
-            if(sd===2) return [u,-0.18];
-            return [u,1.18];
-          };
-          let s0=sideOf(), s1=sideOf();
-          if(s1===s0) s1=(s0+1+Math.floor(R()*3))%4;         // never the same edge
-          const A=ptOn(s0), B=ptOn(s1);
-          // pull the vertical spread back toward the Height line when tame
-          leg.ax=A[0]; leg.bx=B[0];
-          leg.ay=c+(A[1]-c)*Math.max(0.12,w);
-          leg.by=c+(B[1]-c)*Math.max(0.12,w);
-          // bow the path off the straight line
-          leg.cx=(leg.ax+leg.bx)/2+(R()-0.5)*1.10*w;
-          leg.cy=(leg.ay+leg.by)/2+(R()-0.5)*0.70*w;
-          leg.size=Math.max(0.35,1+(R()-0.5)*1.15*w);        // shape changes pass to pass
-          leg.ez=1.25+R()*1.75;                              // and so does the acceleration
+          const lim=(v)=>Math.max(0.06,Math.min(0.94,v));
+          leg.ax=-0.18; leg.bx=1.18;
+          leg.ay=lim(c+(R()-0.5)*w);
+          leg.by=lim(c+(R()-0.5)*w);
+          leg.cx=0.5;
+          leg.cy=lim((leg.ay+leg.by)/2+(R()-0.5)*0.22*w);    // a gentle bow only
+          leg.size=1;
+          leg.ez=1.35+R()*0.85;
         }
       }
 
       let x=null,y=P.line/100;
       if(e<CROSS){
         const u=e/CROSS;
+        headMul=1+(P.taper/100)*(-0.72+1.95*u);
         if(P.dir==='random'){
           const k=u<0.5?Math.pow(2*u,leg.ez)/2:1-Math.pow(2*(1-u),leg.ez)/2;
           const m=1-k;                               // quadratic bezier: bowed, not straight
@@ -933,7 +952,9 @@ function createFluid(canvas){
       lastInput=-1e9;                        // stay in idle
     }
 
-    fluid.P.splatRadius=(P.size/100)*(idleDriving?leg.size:1);
+    // fatten the head as the pass runs, so the trail reads as a water drop
+    // with its tail behind it rather than a uniform tube
+    fluid.P.splatRadius=(P.size/100)*(idleDriving?leg.size*headMul:1);
     if(M.moved){
       if(M.laid) fluid.splatLine(M.px,M.py,M.x,M.y,M.vx,M.vy);
       else fluid.splat(M.x,M.y,M.vx,M.vy);
