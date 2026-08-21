@@ -165,7 +165,7 @@
       <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
       <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
       <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
-      <div><dt>Build</dt><dd>12</dd></div>
+      <div><dt>Build</dt><dd>13</dd></div>
     </dl>
     <div class="panel-right">
       <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
@@ -262,7 +262,7 @@
     <div><dt>Letter fit</dt><dd>97.4%</dd></div>
   </dl>
 
-  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 12</p>
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 13</p>
 </section>
 
 <script>/* ---------------------------------------------------------------------------
@@ -297,7 +297,8 @@ function createFluid(canvas){
     forceStrength:8.5, pressureDecay:0.75, threshold:1.0, edgeSoftness:0.0,
     mode:1,
     // where the case sits in the frame, measured off the shell video
-    caseBox:[0.1844,0.1944,0.8031,0.7944],
+    caseBox:[0.1862,0.1944,0.8021,0.7917],
+    caseRadius:0.078,   // aspect-corrected; the case corners are rounded
     sharpen:0.0,      // unsharp mask on the revealed x-ray
     outside:1.0       // 1 = the blob goes white beyond the case edge
   };
@@ -381,6 +382,7 @@ function createFluid(canvas){
       uniform sampler2D uTexture,uVideo;
       uniform float threshold,edgeSoftness,mode,sharpen,outside;
       uniform vec3 inkColor; uniform vec4 caseBox; uniform vec2 vTexel;
+      uniform float caseRadius,aspect;
       void main(){
         float d=clamp(length(texture(uTexture,vUv).rgb),0.,1.);
         float a = edgeSoftness>0. ? smoothstep(threshold-edgeSoftness*.5,threshold+edgeSoftness*.5,d)
@@ -396,10 +398,14 @@ function createFluid(canvas){
                    +texture(uVideo,q-vec2(0.,vTexel.y)).rgb)*0.25;
             v=clamp(v+(v-b)*sharpen,0.,1.);
           }
-          vec2 f=vec2(0.008);                      // feathered case rectangle
-          vec2 lo=smoothstep(caseBox.xy-f,caseBox.xy+f,q);
-          vec2 hi=1.-smoothstep(caseBox.zw-f,caseBox.zw+f,q);
-          float inCase=lo.x*lo.y*hi.x*hi.y;
+          // rounded-box SDF in aspect-corrected space, so the white follows
+          // the case's real silhouette instead of leaving corner wedges
+          vec2 qa=vec2(q.x*aspect,q.y);
+          vec2 lo=vec2(caseBox.x*aspect,caseBox.y), hi=vec2(caseBox.z*aspect,caseBox.w);
+          vec2 ctr=(lo+hi)*0.5, ext=(hi-lo)*0.5;
+          vec2 pd=abs(qa-ctr)-ext+caseRadius;
+          float sd=length(max(pd,0.))+min(max(pd.x,pd.y),0.)-caseRadius;
+          float inCase=1.-smoothstep(-0.006,0.006,sd);
           c=mix(mix(v,vec3(1.),outside), v, inCase);   // beyond the case: white ink
         } else c=inkColor;
         fc=vec4(c*a,a);            // premultiplied
@@ -488,6 +494,23 @@ function createFluid(canvas){
     pass(dye.write); dye.swap();
   };
 
+  /* One splat per frame breaks into separate blobs the moment the pointer
+     travels further between frames than the blob is wide — which is exactly
+     what a dropped frame does. Walk the segment instead and lay down enough
+     splats to overlap, so the trail stays continuous at any frame rate. The
+     velocity impulse is divided across them so total force is unchanged. */
+  const splatLine=(x0,y0,x1,y1,vx,vy)=>{
+    const dx=x1-x0, dy=y1-y0, dist=Math.hypot(dx,dy);
+    const rPx=Math.sqrt((P.splatRadius/100)*1.648)*height;   // hard-threshold radius
+    const step=Math.max(1,rPx*0.5);
+    const n=Math.max(1,Math.min(96,Math.ceil(dist/step)));
+    for(let i=1;i<=n;i++){
+      const t=i/n;
+      splat(x0+dx*t, y0+dy*t, vx/n, vy/n);
+    }
+    return n;
+  };
+
   const simulate=(dt)=>{
     gl.disable(gl.BLEND);
     const st=[1/simSize.w,1/simSize.h], dt2=[1/dyeSize.w,1/dyeSize.h];
@@ -564,12 +587,14 @@ function createFluid(canvas){
     gl.uniform1f(u.sharpen,P.sharpen);
     gl.uniform1f(u.outside,P.outside);
     gl.uniform4f(u.caseBox,P.caseBox[0],P.caseBox[1],P.caseBox[2],P.caseBox[3]);
+    gl.uniform1f(u.caseRadius,P.caseRadius);
+    gl.uniform1f(u.aspect,width/height);
     gl.uniform2f(u.vTexel,1/(vtexW||1280),1/(vtexH||720));
     gl.uniform3f(u.inkColor,1,1,1);
     pass(null);
   };
 
-  return {P,setSize,splat,simulate,render,rebuild:build,
+  return {P,setSize,splat,splatLine,simulate,render,rebuild:build,
           size:()=>({width,height,sim:simSize,dye:dyeSize})};
 }
 </script>
@@ -711,7 +736,7 @@ function createFluid(canvas){
   /* ---------------- input ----------------
      The package's own scheme: velocity is the raw delta between pointer events
      times forceStrength, in device pixels, splatted once per frame. */
-  const M={x:0,y:0,vx:0,vy:0,moved:false,seen:false};
+  const M={x:0,y:0,vx:0,vy:0,moved:false,seen:false,px:0,py:0,laid:false};
   const onMove=(cx,cy)=>{
     const r=stage.getBoundingClientRect();
     if(!r.width) return;
@@ -848,7 +873,7 @@ function createFluid(canvas){
 
       if(pass!==lastPass){
         lastPass=pass;
-        if(P.dir!=='bounce') M.seen=false;          // no velocity spike on re-entry
+        if(P.dir!=='bounce'){ M.seen=false; M.laid=false; }   // do not join across the jump
         if(P.dir==='random'){                       // a fresh diagonal every pass
           const sp=P.spread/100, c=P.line/100, s=Math.random()<0.5?1:-1;
           leg.ax = s>0?-0.16:1.16;  leg.bx = s>0?1.16:-0.16;
@@ -872,7 +897,11 @@ function createFluid(canvas){
       lastInput=-1e9;                        // stay in idle
     }
 
-    if(M.moved){ fluid.splat(M.x,M.y,M.vx,M.vy); M.moved=false; }
+    if(M.moved){
+      if(M.laid) fluid.splatLine(M.px,M.py,M.x,M.y,M.vx,M.vy);
+      else fluid.splat(M.x,M.y,M.vx,M.vy);
+      M.px=M.x; M.py=M.y; M.laid=true; M.moved=false;
+    }
     fluid.simulate(dt);
     fluid.render(inner, videoDirty);
     if(HAS_RVFC) videoDirty=false;
