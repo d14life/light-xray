@@ -1,0 +1,898 @@
+<title>LIGHT X-Ray</title>
+<style>
+  :root{
+    --void:#050607; --void-lift:#0c0f11;
+    --steel:#8c979d; --steel-dim:#4a5257;
+    --neon:#78f0ff; --neon-deep:#16626f;
+    --mono: ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--void);color:var(--steel);font-family:var(--sans);
+       -webkit-font-smoothing:antialiased}
+
+  /* ---------- hero: the sign fills the first screen ---------- */
+  .hero{min-height:100svh;display:flex;flex-direction:column;align-items:center;
+        justify-content:center;gap:clamp(1.2rem,3vh,2.2rem);
+        padding:clamp(1.2rem,5vmin,3rem) clamp(1rem,5vw,3rem)}
+  .masthead{display:flex;flex-direction:column;align-items:center;gap:.7rem;text-align:center}
+  .eyebrow{margin:0;font-family:var(--mono);font-size:.688rem;letter-spacing:.34em;
+           text-transform:uppercase;color:var(--neon-deep)}
+  h1{margin:0;font-size:clamp(1.5rem,3.4vw,2.35rem);font-weight:600;letter-spacing:-.035em;
+     color:#e8eef1;text-wrap:balance}
+  .standfirst{margin:0;max-width:46ch;font-size:clamp(.875rem,1.5vw,.97rem);line-height:1.55;
+              color:var(--steel-dim);text-wrap:balance}
+
+  .stage{position:relative;width:min(96vw,1180px,calc(56svh * 16 / 9));aspect-ratio:16/9;background:#000;
+         overflow:hidden;cursor:none;touch-action:none;border-radius:2px;
+         box-shadow:0 0 0 1px rgba(140,151,157,.10), 0 2rem 5rem -1.5rem rgba(0,0,0,.9)}
+
+  /* The shell is an ordinary video on its own GPU layer and is never touched.
+     The x-ray is uploaded to WebGL as a texture and comes back through the
+     fluid's hard mask, so only one video is ever copied per frame. */
+  .stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;
+                             display:block;pointer-events:none}
+  .stage video{object-fit:cover;transform:translateZ(0)}
+  .shell{z-index:0}
+  .inner{z-index:0;opacity:0}                 /* texture source only */
+  .flow{z-index:1}
+  .stage.invert .flow{mix-blend-mode:difference}
+  .stage.invert .inner{display:none}
+  .stage.dead .flow{display:none}             /* no float render targets */
+
+  .panel{width:min(96vw,1180px,calc(56svh * 16 / 9));display:flex;align-items:center;justify-content:space-between;
+         gap:1.5rem;padding-top:1rem;border-top:1px solid rgba(22,98,111,.32);
+         font-family:var(--mono);font-size:.688rem;letter-spacing:.16em;text-transform:uppercase}
+  .readout{margin:0;display:flex;gap:clamp(1rem,3.5vw,2.25rem)}
+  .readout > div{display:flex;align-items:baseline;gap:.55rem}
+  .readout dt{color:var(--steel-dim)}
+  .readout dd{margin:0;color:var(--neon);font-variant-numeric:tabular-nums;min-width:3.6ch}
+
+  .scroll-cue{display:flex;flex-direction:column;align-items:center;gap:.5rem;
+              font-family:var(--mono);font-size:.625rem;letter-spacing:.24em;
+              text-transform:uppercase;color:var(--steel-dim);transition:opacity .5s ease}
+  .scroll-cue span{display:block;width:1px;height:2.2rem;
+                   background:linear-gradient(var(--neon-deep),transparent);
+                   animation:drop 2.4s ease-in-out infinite}
+  @keyframes drop{0%,100%{opacity:.25;transform:scaleY(.6)}50%{opacity:1;transform:scaleY(1)}}
+  body.scrolled .scroll-cue{opacity:0}
+
+  /* ---------- the tuning strip: shut until you want it ---------- */
+  .tune{width:min(96vw,1180px,calc(56svh * 16 / 9));font-family:var(--mono);font-size:.625rem;
+        letter-spacing:.18em;text-transform:uppercase}
+  .panel-right{display:flex;align-items:center;gap:clamp(1rem,3vw,2rem)}
+  .adjust{display:inline-flex;align-items:center;gap:.5rem;background:none;
+          border:1px solid rgba(22,98,111,.5);color:var(--steel);font:inherit;
+          letter-spacing:.2em;text-transform:uppercase;padding:.5rem .95rem;
+          border-radius:2px;cursor:pointer;white-space:nowrap}
+  .adjust::before{content:"+";color:var(--neon);font-size:.85rem;line-height:1}
+  .adjust[aria-expanded="true"]{color:var(--neon);border-color:var(--neon-deep)}
+  .adjust[aria-expanded="true"]::before{content:"\2212"}
+  .adjust:hover{color:var(--neon);border-color:var(--neon-deep)}
+  .tune[hidden]{display:none}
+  .tune-head{margin:.7rem 0 .15rem;color:var(--neon-deep);letter-spacing:.28em}
+  .tune-grid{display:grid;gap:.55rem 1.1rem;padding:.25rem 0 .5rem;
+             grid-template-columns:repeat(auto-fit,minmax(148px,1fr));align-items:end}
+  .tune label{display:grid;gap:.25rem}
+  .tune .lab{display:flex;justify-content:space-between;color:var(--steel-dim)}
+  .tune .lab b{font-weight:400;color:var(--neon);font-variant-numeric:tabular-nums}
+  .tune input[type=range]{width:100%;accent-color:var(--neon);cursor:pointer;margin:0}
+  .tune .seg{display:flex;gap:.3rem;align-self:end}
+  .tune .seg button,.tune .reset{background:none;border:1px solid rgba(22,98,111,.5);
+    color:var(--steel-dim);font:inherit;letter-spacing:.14em;text-transform:uppercase;
+    padding:.4rem .6rem;border-radius:2px;cursor:pointer;white-space:nowrap}
+  .tune .seg button[aria-pressed="true"]{color:#04181b;background:var(--neon);border-color:var(--neon)}
+  .tune .reset{justify-self:start}
+  .tune .reset:hover,.tune .seg button:hover{color:var(--neon);border-color:var(--neon-deep)}
+  .tune .seg button[aria-pressed="true"]:hover{color:#04181b}
+
+  /* ---------- the page below, revealed by scrolling ---------- */
+  .page{max-width:min(92vw,1180px);margin:0 auto;
+        padding:clamp(3rem,10vh,7rem) 0 clamp(4rem,12vh,9rem)}
+  .reveal{opacity:0;transform:translateY(22px);
+          transition:opacity .9s cubic-bezier(.22,.61,.36,1), transform .9s cubic-bezier(.22,.61,.36,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  .lede{font-size:clamp(1.05rem,2.2vw,1.45rem);line-height:1.5;color:#cfd8dc;
+        max-width:34ch;margin:0 0 clamp(2.5rem,6vh,4rem);text-wrap:balance;letter-spacing:-.01em}
+  .lede em{font-style:normal;color:var(--neon)}
+
+  .grid{display:grid;gap:clamp(1.5rem,4vw,3rem);
+        grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+  .grid h2{margin:0 0 .6rem;font-family:var(--mono);font-size:.688rem;letter-spacing:.24em;
+           text-transform:uppercase;color:var(--neon-deep);font-weight:600}
+  .grid p{margin:0;font-size:.95rem;line-height:1.6;color:var(--steel)}
+
+  .spec{margin-top:clamp(3rem,8vh,5rem);border-top:1px solid rgba(22,98,111,.32);
+        padding-top:1.5rem;display:grid;gap:.9rem;
+        grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+        font-family:var(--mono);font-size:.688rem;letter-spacing:.14em;text-transform:uppercase}
+  .spec div{display:flex;justify-content:space-between;gap:1rem;
+            padding-bottom:.5rem;border-bottom:1px solid rgba(140,151,157,.10)}
+  .spec dt{color:var(--steel-dim)}
+  .spec dd{margin:0;color:var(--neon);font-variant-numeric:tabular-nums}
+
+  .colophon{margin-top:clamp(3rem,8vh,5rem);font-family:var(--mono);font-size:.625rem;
+            letter-spacing:.2em;text-transform:uppercase;color:#2b3134;text-align:center}
+  @media (max-width:560px){
+    .panel{flex-direction:column;align-items:stretch;gap:1rem}
+    .readout{justify-content:space-between}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .reveal{opacity:1;transform:none;transition:none}
+    .scroll-cue span{animation:none}
+  }
+
+  /* ---------- loading: the page holds until both layers can play ---------- */
+  body.booting{overflow:hidden}
+  .boot{position:fixed;inset:0;z-index:200;background:var(--void);
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:1.6rem;transition:opacity .6s ease}
+  .boot[hidden]{display:none}
+  body.booted .boot{opacity:0;pointer-events:none}
+  .boot-word{font-size:clamp(1.6rem,4vw,2.6rem);font-weight:600;letter-spacing:.3em;
+             color:#e8eef1;text-indent:.3em}
+  .boot-bar{width:min(62vw,340px);height:1px;background:rgba(140,151,157,.18);
+            position:relative;overflow:hidden}
+  .boot-bar i{position:absolute;inset:0 auto 0 0;width:0%;background:var(--neon);
+              box-shadow:0 0 12px rgba(120,240,255,.7);transition:width .18s linear}
+  .boot-note{font-family:var(--mono);font-size:.625rem;letter-spacing:.24em;
+             text-transform:uppercase;color:var(--steel-dim);
+             font-variant-numeric:tabular-nums}
+</style>
+
+<div class="boot" id="boot">
+  <p class="boot-word">LIGHT</p>
+  <div class="boot-bar"><i id="bootBar"></i></div>
+  <p class="boot-note" id="bootNote">Loading 0%</p>
+</div>
+
+<section class="hero">
+  <header class="masthead">
+    <p class="eyebrow">Drag across the case</p>
+    <h1>LIGHT</h1>
+    <p class="standfirst">The shell is moulded plastic. Underneath, it is still running.</p>
+  </header>
+
+  <div class="stage" id="stage">
+    <video class="shell" id="shell" src="shell.mp4" muted loop playsinline preload="auto" disablepictureinpicture></video>
+    <video class="inner" id="inner" src="inner.mp4" muted loop playsinline preload="auto" disablepictureinpicture></video>
+    <canvas class="flow" id="flow"></canvas>
+  </div>
+
+  <div class="panel">
+    <dl class="readout">
+      <div><dt>X</dt><dd id="rx">&mdash;</dd></div>
+      <div><dt>Y</dt><dd id="ry">&mdash;</dd></div>
+      <div><dt>Force</dt><dd id="rf">&mdash;</dd></div>
+      <div><dt>Build</dt><dd>12</dd></div>
+    </dl>
+    <div class="panel-right">
+      <button class="adjust" id="adjustBtn" type="button" aria-expanded="false"
+              aria-controls="tune">Adjust</button>
+      <div class="scroll-cue"><span></span>Scroll</div>
+    </div>
+  </div>
+
+  <div class="tune" id="tune" hidden>
+
+    <p class="tune-head">Cursor</p>
+    <div class="tune-grid">
+      <label><span class="lab">Size <b id="vSize">30</b></span>
+        <input type="range" id="uSize" min="5" max="120" value="30"></label>
+      <label><span class="lab">Trail <b id="vTrail">95</b></span>
+        <input type="range" id="uTrail" min="80" max="99" value="95"></label>
+      <label><span class="lab">Swirl <b id="vSwirl">50</b></span>
+        <input type="range" id="uSwirl" min="0" max="120" value="50"></label>
+      <label><span class="lab">Force <b id="vForce">85</b></span>
+        <input type="range" id="uForce" min="10" max="250" value="85"></label>
+      <label><span class="lab">Edge <b id="vEdge">0</b></span>
+        <input type="range" id="uEdge" min="0" max="60" value="0"></label>
+    </div>
+
+    <p class="tune-head">Idle sweep</p>
+    <div class="tune-grid">
+      <label><span class="lab">Cross ms <b id="vCross">1800</b></span>
+        <input type="range" id="uCross" min="400" max="6000" step="50" value="1800"></label>
+      <label><span class="lab">Gap ms <b id="vGap">400</b></span>
+        <input type="range" id="uGap" min="0" max="5000" step="50" value="400"></label>
+      <label><span class="lab">Height <b id="vLine">47</b></span>
+        <input type="range" id="uLine" min="0" max="100" value="47"></label>
+      <label><span class="lab">Waits ms <b id="vWait">1200</b></span>
+        <input type="range" id="uWait" min="0" max="12000" step="100" value="1200"></label>
+      <label><span class="lab">Spread <b id="vSpread">55</b></span>
+        <input type="range" id="uSpread" min="0" max="140" value="55"></label>
+      <div class="seg">
+        <button id="dRandom" type="button" aria-pressed="true">Random</button>
+        <button id="dLR"     type="button" aria-pressed="false">L&rarr;R</button>
+        <button id="dBounce" type="button" aria-pressed="false">Bounce</button>
+        <button id="dOff"    type="button" aria-pressed="false">Off</button>
+      </div>
+    </div>
+
+    <p class="tune-head">Render</p>
+    <div class="tune-grid">
+      <div class="seg">
+        <button id="mReveal" type="button" aria-pressed="true">Reveal</button>
+        <button id="mInvert" type="button" aria-pressed="false">Invert</button>
+      </div>
+      <div class="seg">
+        <button id="qAuto" type="button" aria-pressed="true">Auto</button>
+        <button id="qHigh" type="button" aria-pressed="false">High</button>
+        <button id="qLow"  type="button" aria-pressed="false">Low</button>
+      </div>
+      <label><span class="lab">Sharpness <b id="vSharp">100</b></span>
+        <input type="range" id="uSharp" min="50" max="200" step="5" value="100"></label>
+      <label><span class="lab">Sharpen <b id="vSharpen">35</b></span>
+        <input type="range" id="uSharpen" min="0" max="150" value="35"></label>
+      <label><span class="lab">Outside <b id="vOutside">100</b></span>
+        <input type="range" id="uOutside" min="0" max="100" value="100"></label>
+      <label><span class="lab">Frame <b id="vFps">&mdash;</b></span></label>
+      <button class="reset" id="uReset" type="button">Reset all</button>
+    </div>
+  </div>
+</section>
+
+<section class="page">
+  <p class="lede reveal">Two renders in one frame. A sealed white case &mdash; and the machine
+    that runs behind it, <em>lit, cooled and breathing</em>.</p>
+
+  <div class="grid">
+    <div class="reveal">
+      <h2>The shell</h2>
+      <p>Moulded plastic in a machined grey frame. The word is cut clean through the
+         front panel, backlit from inside, so the letters are apertures rather than paint.</p>
+    </div>
+    <div class="reveal">
+      <h2>The works</h2>
+      <p>Water loops fed with green coolant, a copper heatsink that runs hot enough to
+         smoke, brass gears, two fans, and LED strips threaded through every letter.</p>
+    </div>
+    <div class="reveal">
+      <h2>The field</h2>
+      <p>A fluid field runs across the shell wherever you drag. The x-ray comes through
+         the hard edge of it, then the ink dissipates and the case seals again.</p>
+    </div>
+  </div>
+
+  <dl class="spec reveal">
+    <div><dt>Cycle</dt><dd>15.42 s</dd></div>
+    <div><dt>Layers</dt><dd>2</dd></div>
+    <div><dt>Registration</dt><dd>&plusmn;2 px</dd></div>
+    <div><dt>Letter fit</dt><dd>97.4%</dd></div>
+  </dl>
+
+  <p class="colophon">Two renders, one frame &mdash; shell over works &middot; build 12</p>
+</section>
+
+<script>/* ---------------------------------------------------------------------------
+   Cappen fluid cursor — ported from the package in the Drive folder.
+
+   Same passes, same order, same numbers: curl -> vorticity -> divergence ->
+   pressure decay -> 40 Jacobi iterations -> gradient subtract -> advect
+   velocity -> advect dye. Splat radius 0.003, dye splatted at a flat 3.0,
+   mouse velocity is the raw frame delta times forceStrength.
+
+   The look comes from the display pass: a = step(threshold, length(dye.rgb))
+   with threshold 1.0 and edgeSoftness 0. That is a hard cut, which is why it
+   reads as liquid rather than smoke.
+
+   The original ships this as three.js render targets and blends the white ink
+   over the page with mix-blend-mode: difference. three.js cannot be loaded
+   under the artifact CSP, so this is the same thing on raw WebGL2, with one
+   addition: mode 1 puts the x-ray video through the same hard mask instead of
+   flat ink, so the blob reveals the machine rather than inverting the page.
+--------------------------------------------------------------------------- */
+function createFluid(canvas){
+  const gl = canvas.getContext('webgl2',{alpha:true,depth:false,stencil:false,
+                                         antialias:false,premultipliedAlpha:true});
+  if(!gl) return null;
+  if(!gl.getExtension('EXT_color_buffer_float')) return null;
+  gl.getExtension('OES_texture_float_linear');
+
+  // the package's config, verbatim
+  const P = {
+    simResolution:256, dyeResolution:1024, curl:50, pressureIterations:40,
+    velocityDissipation:0.95, dyeDissipation:0.95, splatRadius:0.3,
+    forceStrength:8.5, pressureDecay:0.75, threshold:1.0, edgeSoftness:0.0,
+    mode:1,
+    // where the case sits in the frame, measured off the shell video
+    caseBox:[0.1844,0.1944,0.8031,0.7944],
+    sharpen:0.0,      // unsharp mask on the revealed x-ray
+    outside:1.0       // 1 = the blob goes white beyond the case edge
+  };
+
+  const V = `#version 300 es
+    in vec2 position; in vec2 uv; out vec2 vUv;
+    void main(){ vUv=uv; gl_Position=vec4(position,0.,1.); }`;
+  const H = `#version 300 es
+    precision highp float; precision mediump sampler2D;
+    in vec2 vUv; out vec4 fc;`;
+
+  const compile=(t,src)=>{
+    const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)+'\n'+src);
+    return s;
+  };
+  const vs=compile(gl.VERTEX_SHADER,V);
+  const prog=(frag)=>{
+    const p=gl.createProgram();
+    gl.attachShader(p,vs); gl.attachShader(p,compile(gl.FRAGMENT_SHADER,frag));
+    gl.bindAttribLocation(p,0,'position'); gl.bindAttribLocation(p,1,'uv');
+    gl.linkProgram(p);
+    if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u={}, n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+    for(let i=0;i<n;i++){ const nm=gl.getActiveUniform(p,i).name; u[nm]=gl.getUniformLocation(p,nm); }
+    return {p,u,use(){gl.useProgram(p);return u;}};
+  };
+
+  const S={
+    splat: prog(`${H}
+      uniform sampler2D uTarget; uniform float aspectRatio,radius;
+      uniform vec3 color; uniform vec2 point;
+      void main(){ vec2 p=vUv-point; p.x*=aspectRatio;
+        fc=vec4(texture(uTarget,vUv).xyz+exp(-dot(p,p)/radius)*color,1.); }`),
+    advection: prog(`${H}
+      uniform sampler2D uVelocity,uSource; uniform vec2 texelSize;
+      uniform float dt,dissipation;
+      void main(){ fc=vec4(dissipation*texture(uSource,vUv-dt*texture(uVelocity,vUv).xy*texelSize).rgb,1.); }`),
+    divergence: prog(`${H}
+      uniform sampler2D uVelocity; uniform vec2 texelSize;
+      vec2 vel(vec2 uv){ vec2 e=vec2(1.);
+        if(uv.x<0.){uv.x=0.;e.x=-1.;} if(uv.x>1.){uv.x=1.;e.x=-1.;}
+        if(uv.y<0.){uv.y=0.;e.y=-1.;} if(uv.y>1.){uv.y=1.;e.y=-1.;}
+        return e*texture(uVelocity,uv).xy; }
+      void main(){ vec2 L=vUv-vec2(texelSize.x,0.),R=vUv+vec2(texelSize.x,0.),
+                        T=vUv+vec2(0.,texelSize.y),B=vUv-vec2(0.,texelSize.y);
+        fc=vec4(.5*(vel(R).x-vel(L).x+vel(T).y-vel(B).y),0.,0.,1.); }`),
+    curl: prog(`${H}
+      uniform sampler2D uVelocity; uniform vec2 texelSize;
+      void main(){ vec2 L=vUv-vec2(texelSize.x,0.),R=vUv+vec2(texelSize.x,0.),
+                        T=vUv+vec2(0.,texelSize.y),B=vUv-vec2(0.,texelSize.y);
+        fc=vec4(texture(uVelocity,R).y-texture(uVelocity,L).y
+               -texture(uVelocity,T).x+texture(uVelocity,B).x,0.,0.,1.); }`),
+    vorticity: prog(`${H}
+      uniform sampler2D uVelocity,uCurl; uniform vec2 texelSize;
+      uniform float curlStrength,dt;
+      void main(){ vec2 L=vUv-vec2(texelSize.x,0.),R=vUv+vec2(texelSize.x,0.),
+                        T=vUv+vec2(0.,texelSize.y),B=vUv-vec2(0.,texelSize.y);
+        vec2 f=normalize(vec2(abs(texture(uCurl,T).x)-abs(texture(uCurl,B).x),
+                              abs(texture(uCurl,R).x)-abs(texture(uCurl,L).x))+.0001)
+               *curlStrength*texture(uCurl,vUv).x;
+        fc=vec4(texture(uVelocity,vUv).xy+f*dt,0.,1.); }`),
+    pressure: prog(`${H}
+      uniform sampler2D uPressure,uDivergence; uniform vec2 texelSize;
+      void main(){ vec2 L=clamp(vUv-vec2(texelSize.x,0.),0.,1.),R=clamp(vUv+vec2(texelSize.x,0.),0.,1.),
+                        T=clamp(vUv+vec2(0.,texelSize.y),0.,1.),B=clamp(vUv-vec2(0.,texelSize.y),0.,1.);
+        fc=vec4((texture(uPressure,L).x+texture(uPressure,R).x+texture(uPressure,T).x
+                +texture(uPressure,B).x-texture(uDivergence,vUv).x)*.25,0.,0.,1.); }`),
+    gradientSubtract: prog(`${H}
+      uniform sampler2D uPressure,uVelocity; uniform vec2 texelSize;
+      void main(){
+        float pL=texture(uPressure,clamp(vUv-vec2(texelSize.x,0.),0.,1.)).x,
+              pR=texture(uPressure,clamp(vUv+vec2(texelSize.x,0.),0.,1.)).x,
+              pT=texture(uPressure,clamp(vUv+vec2(0.,texelSize.y),0.,1.)).x,
+              pB=texture(uPressure,clamp(vUv-vec2(0.,texelSize.y),0.,1.)).x;
+        fc=vec4(texture(uVelocity,vUv).xy-vec2(pR-pL,pT-pB),0.,1.); }`),
+    clear: prog(`${H}
+      uniform sampler2D uTexture; uniform float value;
+      void main(){ fc=value*texture(uTexture,vUv); }`),
+    display: prog(`${H}
+      uniform sampler2D uTexture,uVideo;
+      uniform float threshold,edgeSoftness,mode,sharpen,outside;
+      uniform vec3 inkColor; uniform vec4 caseBox; uniform vec2 vTexel;
+      void main(){
+        float d=clamp(length(texture(uTexture,vUv).rgb),0.,1.);
+        float a = edgeSoftness>0. ? smoothstep(threshold-edgeSoftness*.5,threshold+edgeSoftness*.5,d)
+                                  : step(threshold,d);
+        vec3 c;
+        if(mode>0.5){
+          vec2 q=vec2(vUv.x,1.-vUv.y);
+          vec3 v=texture(uVideo,q).rgb;
+          if(sharpen>0.001){                       // unsharp mask against a 4-tap blur
+            vec3 b=(texture(uVideo,q+vec2(vTexel.x,0.)).rgb
+                   +texture(uVideo,q-vec2(vTexel.x,0.)).rgb
+                   +texture(uVideo,q+vec2(0.,vTexel.y)).rgb
+                   +texture(uVideo,q-vec2(0.,vTexel.y)).rgb)*0.25;
+            v=clamp(v+(v-b)*sharpen,0.,1.);
+          }
+          vec2 f=vec2(0.008);                      // feathered case rectangle
+          vec2 lo=smoothstep(caseBox.xy-f,caseBox.xy+f,q);
+          vec2 hi=1.-smoothstep(caseBox.zw-f,caseBox.zw+f,q);
+          float inCase=lo.x*lo.y*hi.x*hi.y;
+          c=mix(mix(v,vec3(1.),outside), v, inCase);   // beyond the case: white ink
+        } else c=inkColor;
+        fc=vec4(c*a,a);            // premultiplied
+      }`)
+  };
+
+  /* ---------------- geometry ---------------- */
+  const vao=gl.createVertexArray(); gl.bindVertexArray(vao);
+  const pb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,pb);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, 1,1]),gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  const ub=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,ub);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,0, 1,0, 0,1, 1,1]),gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,2,gl.FLOAT,false,0,0);
+
+  const pass=(t)=>{
+    if(t){ gl.bindFramebuffer(gl.FRAMEBUFFER,t.fbo); gl.viewport(0,0,t.w,t.h); }
+    else { gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight); }
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  };
+
+  /* ---------------- render targets (HalfFloat, no depth) ---------------- */
+  const target=(w,h)=>{
+    const tex=gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA16F,w,h,0,gl.RGBA,gl.HALF_FLOAT,null);
+    const fbo=gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);
+    gl.viewport(0,0,w,h); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+    return {tex,fbo,w,h,bind(u){gl.activeTexture(gl.TEXTURE0+u);gl.bindTexture(gl.TEXTURE_2D,tex);return u;}};
+  };
+  const double=(w,h)=>({read:target(w,h),write:target(w,h),
+                        swap(){const t=this.read;this.read=this.write;this.write=t;}});
+
+  let width=1,height=1,simSize,dyeSize,velocity,dye,divergence,curlT,pressure;
+  const build=()=>{
+    const aspect=width/height;
+    simSize={w:P.simResolution,h:Math.round(P.simResolution/aspect)};
+    dyeSize={w:P.dyeResolution,h:Math.round(P.dyeResolution/aspect)};
+    velocity=double(simSize.w,simSize.h);
+    dye=double(dyeSize.w,dyeSize.h);
+    divergence=target(simSize.w,simSize.h);
+    curlT=target(simSize.w,simSize.h);
+    pressure=double(simSize.w,simSize.h);
+  };
+
+  const setSize=(w,h)=>{
+    canvas.width=w; canvas.height=h;
+    const rebuild = !simSize || Math.abs((w/h)-(width/height))>0.01;
+    width=w; height=h;
+    if(rebuild) build();
+  };
+  setSize(canvas.width||2,canvas.height||2);
+
+  /* ---------------- video texture (mode 1) ---------------- */
+  const vtex=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,vtex);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));
+
+  /* ---------------- the package's splat, in device pixels ---------------- */
+  const splat=(x,y,vxp,vyp)=>{
+    const aspect=width/height, r=P.splatRadius/100;
+    let u=S.splat.use();
+    gl.uniform1f(u.aspectRatio,aspect);
+    gl.uniform2f(u.point,x/width,1-y/height);
+    gl.uniform1f(u.radius,r);
+    gl.uniform1i(u.uTarget,velocity.read.bind(0));
+    gl.uniform3f(u.color,vxp,-vyp,0);
+    pass(velocity.write); velocity.swap();
+
+    u=S.splat.use();
+    gl.uniform1f(u.aspectRatio,aspect);
+    gl.uniform2f(u.point,x/width,1-y/height);
+    gl.uniform1f(u.radius,r);
+    gl.uniform1i(u.uTarget,dye.read.bind(0));
+    gl.uniform3f(u.color,3,3,3);
+    pass(dye.write); dye.swap();
+  };
+
+  const simulate=(dt)=>{
+    gl.disable(gl.BLEND);
+    const st=[1/simSize.w,1/simSize.h], dt2=[1/dyeSize.w,1/dyeSize.h];
+    let u;
+
+    u=S.curl.use();
+    gl.uniform2f(u.texelSize,st[0],st[1]); gl.uniform1i(u.uVelocity,velocity.read.bind(0));
+    pass(curlT);
+
+    u=S.vorticity.use();
+    gl.uniform2f(u.texelSize,st[0],st[1]);
+    gl.uniform1i(u.uVelocity,velocity.read.bind(0));
+    gl.uniform1i(u.uCurl,curlT.bind(1));
+    gl.uniform1f(u.curlStrength,P.curl); gl.uniform1f(u.dt,dt);
+    pass(velocity.write); velocity.swap();
+
+    u=S.divergence.use();
+    gl.uniform2f(u.texelSize,st[0],st[1]); gl.uniform1i(u.uVelocity,velocity.read.bind(0));
+    pass(divergence);
+
+    u=S.clear.use();
+    gl.uniform1i(u.uTexture,pressure.read.bind(0)); gl.uniform1f(u.value,P.pressureDecay);
+    pass(pressure.write); pressure.swap();
+
+    u=S.pressure.use();
+    gl.uniform2f(u.texelSize,st[0],st[1]); gl.uniform1i(u.uDivergence,divergence.bind(0));
+    for(let i=0;i<P.pressureIterations;i++){
+      gl.uniform1i(u.uPressure,pressure.read.bind(1));
+      pass(pressure.write); pressure.swap();
+    }
+
+    u=S.gradientSubtract.use();
+    gl.uniform2f(u.texelSize,st[0],st[1]);
+    gl.uniform1i(u.uPressure,pressure.read.bind(0));
+    gl.uniform1i(u.uVelocity,velocity.read.bind(1));
+    pass(velocity.write); velocity.swap();
+
+    u=S.advection.use();
+    gl.uniform2f(u.texelSize,st[0],st[1]);
+    gl.uniform1i(u.uVelocity,velocity.read.bind(0));
+    gl.uniform1i(u.uSource,velocity.read.bind(0));
+    gl.uniform1f(u.dt,dt); gl.uniform1f(u.dissipation,P.velocityDissipation);
+    pass(velocity.write); velocity.swap();
+
+    u=S.advection.use();
+    gl.uniform2f(u.texelSize,dt2[0],dt2[1]);
+    gl.uniform1i(u.uVelocity,velocity.read.bind(0));
+    gl.uniform1i(u.uSource,dye.read.bind(1));
+    gl.uniform1f(u.dt,dt); gl.uniform1f(u.dissipation,P.dyeDissipation);
+    pass(dye.write); dye.swap();
+  };
+
+  let vtexW=0,vtexH=0;
+  const render=(video,videoChanged)=>{
+    if(P.mode>0.5 && videoChanged && video && video.readyState>=2 && video.videoWidth){
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,vtex);
+      if(video.videoWidth!==vtexW || video.videoHeight!==vtexH){
+        vtexW=video.videoWidth; vtexH=video.videoHeight;
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,video);
+      } else {
+        gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,gl.RGBA,gl.UNSIGNED_BYTE,video);
+      }
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    gl.viewport(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight);
+    gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+    const u=S.display.use();
+    gl.uniform1i(u.uTexture,dye.read.bind(1));
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,vtex);
+    gl.uniform1i(u.uVideo,2);
+    gl.uniform1f(u.threshold,P.threshold);
+    gl.uniform1f(u.edgeSoftness,P.edgeSoftness);
+    gl.uniform1f(u.mode,P.mode);
+    gl.uniform1f(u.sharpen,P.sharpen);
+    gl.uniform1f(u.outside,P.outside);
+    gl.uniform4f(u.caseBox,P.caseBox[0],P.caseBox[1],P.caseBox[2],P.caseBox[3]);
+    gl.uniform2f(u.vTexel,1/(vtexW||1280),1/(vtexH||720));
+    gl.uniform3f(u.inkColor,1,1,1);
+    pass(null);
+  };
+
+  return {P,setSize,splat,simulate,render,rebuild:build,
+          size:()=>({width,height,sim:simSize,dye:dyeSize})};
+}
+</script>
+<script>
+(() => {
+  const $=(id)=>document.getElementById(id);
+  const stage=$('stage'), shell=$('shell'), inner=$('inner'), flow=$('flow');
+  const rx=$('rx'), ry=$('ry'), rf=$('rf');
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* The videos are real files here, streamed over HTTP. Hold the page until
+     both are buffered end to end, so the loop never restarts into an empty
+     buffer — that stall is what reads as lag. */
+  const boot=$('boot'), bootBar=$('bootBar'), bootNote=$('bootNote');
+  document.body.classList.add('booting');
+  const setBoot=(frac,label)=>{
+    const pct=Math.max(0,Math.min(100,Math.round(frac*100)));
+    bootBar.style.width=pct+'%';
+    bootNote.textContent=(label||'Loading')+' '+pct+'%';
+  };
+  const bufferedFrac=(v)=>{
+    if(!v.duration||!isFinite(v.duration)||!v.buffered.length) return 0;
+    let end=0;
+    for(let i=0;i<v.buffered.length;i++) end=Math.max(end,v.buffered.end(i));
+    return Math.min(1,end/v.duration);
+  };
+  const finishBoot=()=>{
+    setBoot(1,'Ready');
+    document.body.classList.remove('booting');
+    document.body.classList.add('booted');
+    setTimeout(()=>{ boot.hidden=true; },700);
+  };
+  const bootStart=()=>{
+    const t0=performance.now();
+    const tick=()=>{
+      const a=bufferedFrac(shell), b=bufferedFrac(inner);
+      setBoot((a+b)/2*0.98,'Loading');
+      const full=a>0.995 && b>0.995;
+      const playable=shell.readyState>=4 && inner.readyState>=4;
+      const waited=performance.now()-t0;
+      if(full || (playable && waited>20000) || waited>60000){ ensurePlaying(); finishBoot(); return; }
+      setTimeout(tick,120);
+    };
+    tick();
+  };
+
+  /* ---------------- playback ----------------
+     Drift is corrected by leaning on playbackRate a fraction of a percent, once
+     a second — never by seeking, because assigning currentTime to a playing
+     video is itself a stutter. */
+  let started=false;
+  const ensurePlaying=()=>{
+    if(!shell.paused && !inner.paused){started=true;return;}
+    if(!started){shell.currentTime=0;inner.currentTime=0;}
+    Promise.all([shell.play(),inner.play()]).then(()=>{started=true;}).catch(()=>{});
+  };
+  if(shell.readyState>=2 && inner.readyState>=2) ensurePlaying();
+  let ready=0;
+  const onReady=()=>{ if(++ready===2) ensurePlaying(); };
+  shell.addEventListener('loadeddata',onReady,{once:true});
+  inner.addEventListener('loadeddata',onReady,{once:true});
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) ensurePlaying(); });
+  window.addEventListener('focus',ensurePlaying);
+  ['pointerdown','pointermove','keydown','touchstart']
+    .forEach(ev=>window.addEventListener(ev,ensurePlaying,{passive:true}));
+
+  bootStart();
+
+  let syncAt=0;
+  const sync=(now)=>{
+    if(now-syncAt<1000) return;
+    syncAt=now;
+    if(shell.paused||inner.paused) return;
+    const dur=shell.duration; if(!dur) return;
+    let d=inner.currentTime-shell.currentTime;
+    if(d> dur/2) d-=dur;
+    if(d<-dur/2) d+=dur;
+    if(Math.abs(d)>0.50){ inner.currentTime=shell.currentTime; inner.playbackRate=1; }
+    else inner.playbackRate = 1 - Math.max(-0.05, Math.min(0.05, d*0.6));
+  };
+
+  /* ---------------- the field ---------------- */
+  let fluid=null;
+  try{ fluid=createFluid(flow); }catch(e){ fluid=null; }
+  if(!fluid){ stage.classList.add('dead'); inner.style.display='none'; }
+
+  /* Quality tiers. The package ships the top one — a 1024 dye field and 40
+     Jacobi iterations every frame — which is a lot to ask of a laptop GPU.
+     Auto starts in the middle and moves on measured frame time. */
+  const TIERS=[{dye: 512,sim:192,iters:16,fps:30},
+               {dye: 768,sim:256,iters:26,fps:60},
+               {dye:1024,sim:256,iters:40,fps:60}];
+  let sharpPct=100;                          // render scale, independent of tier
+  let tier=1, autoQ=true;
+  try{ const v=localStorage.getItem('light.v9.q'); if(v!==null){ autoQ=(v==='auto'); if(!autoQ) tier=+v; } }catch(e){}
+
+  let W=0,H=0,dpr=1;
+  const resize=(force)=>{
+    const r=stage.getBoundingClientRect();
+    if(!r.width||!r.height) return;
+    W=r.width; H=r.height;
+    dpr=Math.max(0.5,Math.min(3,(Math.min(window.devicePixelRatio||1,2))*(sharpPct/100)));
+    if(!fluid) return;
+    fluid.setSize(Math.round(W*dpr),Math.round(H*dpr));
+    if(force) fluid.rebuild();
+  };
+  const setTier=(i)=>{
+    i=Math.max(0,Math.min(TIERS.length-1,i));
+    if(i===tier) return;
+    tier=i;
+    if(fluid){
+      fluid.P.dyeResolution=TIERS[i].dye;
+      fluid.P.simResolution=TIERS[i].sim;
+      fluid.P.pressureIterations=TIERS[i].iters;
+    }
+    resize(true);
+  };
+  if(fluid){
+    fluid.P.dyeResolution=TIERS[tier].dye;
+    fluid.P.simResolution=TIERS[tier].sim;
+    fluid.P.pressureIterations=TIERS[tier].iters;
+  }
+  resize(true);
+  new ResizeObserver(resize).observe(stage);
+  addEventListener('load',resize);
+  addEventListener('orientationchange',resize);
+
+  const HAS_RVFC = typeof inner.requestVideoFrameCallback === 'function';
+  let videoDirty = true;
+  if(HAS_RVFC){
+    const pump=()=>{ videoDirty=true; inner.requestVideoFrameCallback(pump); };
+    inner.requestVideoFrameCallback(pump);
+  }
+
+  // nothing to simulate while the sign is scrolled off the screen
+  let onScreen=true;
+  new IntersectionObserver((e)=>{ onScreen=e[0].isIntersecting; },{threshold:0}).observe(stage);
+
+  /* ---------------- input ----------------
+     The package's own scheme: velocity is the raw delta between pointer events
+     times forceStrength, in device pixels, splatted once per frame. */
+  const M={x:0,y:0,vx:0,vy:0,moved:false,seen:false};
+  const onMove=(cx,cy)=>{
+    const r=stage.getBoundingClientRect();
+    if(!r.width) return;
+    const x=(cx-r.left)*dpr, y=(cy-r.top)*dpr;
+    if(M.seen){ const f=P.force/10; M.vx=(x-M.x)*f; M.vy=(y-M.y)*f; }
+    M.x=x; M.y=y; M.seen=true; M.moved=true;
+    lastInput=performance.now(); everMoved=true;
+  };
+  let lastInput=-1e9, everMoved=false, idleT0=-1, lastPass=-1;
+  const leg={ax:-0.16,bx:1.16,ay:0.47,by:0.47};
+  window.addEventListener('pointermove',(e)=>onMove(e.clientX,e.clientY),{passive:true});
+  window.addEventListener('pointerdown',(e)=>onMove(e.clientX,e.clientY),{passive:true});
+
+  /* ---------------- controls ---------------- */
+  const DEFAULTS={size:30, trail:95, swirl:50, force:85, edge:0,
+                  cross:1800, gap:400, line:47, wait:1200, spread:55, sharp:100,
+                  sharpen:35, outside:100,
+                  mode:1, dir:'random'};
+  const P={...DEFAULTS};
+  const UI=[['size','uSize','vSize'],['trail','uTrail','vTrail'],['swirl','uSwirl','vSwirl'],
+            ['force','uForce','vForce'],['edge','uEdge','vEdge'],
+            ['cross','uCross','vCross'],['gap','uGap','vGap'],
+            ['line','uLine','vLine'],['wait','uWait','vWait'],
+            ['spread','uSpread','vSpread'],['sharp','uSharp','vSharp'],
+            ['sharpen','uSharpen','vSharpen'],['outside','uOutside','vOutside']];
+  const store=(k,v)=>{ try{ localStorage.setItem('light.v9.'+k,v); }catch(e){} };
+  const apply=()=>{
+    stage.classList.toggle('invert',P.mode===0);
+    $('mReveal').setAttribute('aria-pressed',String(P.mode===1));
+    $('mInvert').setAttribute('aria-pressed',String(P.mode===0));
+    if(P.sharp!==sharpPct){ sharpPct=P.sharp; resize(false); }
+    if(!fluid) return;
+    fluid.P.splatRadius          = P.size/100;
+    fluid.P.dyeDissipation       = P.trail/100;
+    fluid.P.velocityDissipation  = P.trail/100;
+    fluid.P.curl                 = P.swirl;
+    fluid.P.forceStrength        = P.force/10;
+    fluid.P.edgeSoftness         = P.edge/100;
+    fluid.P.mode                 = P.mode;
+    fluid.P.sharpen              = P.sharpen/100;
+    fluid.P.outside              = P.outside/100;
+  };
+  const paint=()=>{ UI.forEach(([k,i,o])=>{ $(i).value=P[k]; $(o).textContent=P[k]; }); apply(); };
+  UI.forEach(([k,i,o])=>{
+    try{ const v=localStorage.getItem('light.v9.'+k); if(v!==null) P[k]=+v; }catch(e){}
+    $(i).addEventListener('input',(e)=>{ P[k]=+e.target.value; $(o).textContent=P[k]; store(k,P[k]); apply(); });
+  });
+  try{ const v=localStorage.getItem('light.v9.mode'); if(v!==null) P.mode=+v; }catch(e){}
+  $('mReveal').addEventListener('click',()=>{ P.mode=1; store('mode',1); apply(); });
+  $('mInvert').addEventListener('click',()=>{ P.mode=0; store('mode',0); apply(); });
+  const qPaint=()=>{
+    $('qAuto').setAttribute('aria-pressed',String(autoQ));
+    $('qHigh').setAttribute('aria-pressed',String(!autoQ&&tier===2));
+    $('qLow' ).setAttribute('aria-pressed',String(!autoQ&&tier===0));
+  };
+  const qSet=(mode)=>{
+    if(mode==='auto'){ autoQ=true; store('q','auto'); }
+    else { autoQ=false; setTier(mode); store('q',mode); }
+    qPaint();
+  };
+  $('qAuto').addEventListener('click',()=>qSet('auto'));
+  $('qHigh').addEventListener('click',()=>qSet(2));
+  $('qLow' ).addEventListener('click',()=>qSet(0));
+  qPaint();
+
+  const tuneEl=$('tune'), adjBtn=$('adjustBtn');
+  const setOpen=(on)=>{
+    tuneEl.hidden=!on;
+    adjBtn.setAttribute('aria-expanded',String(on));
+    try{ localStorage.setItem('light.v9.open',on?'1':'0'); }catch(e){}
+  };
+  adjBtn.addEventListener('click',()=>{
+    const opening=tuneEl.hidden;
+    setOpen(opening);
+    if(opening) requestAnimationFrame(()=>{
+      const r=tuneEl.getBoundingClientRect();
+      if(r.bottom>innerHeight) tuneEl.scrollIntoView({block:'end',behavior:'smooth'});
+    });
+  });
+  (()=>{ let o='0'; try{ o=localStorage.getItem('light.v9.open')||'0'; }catch(e){}
+         setOpen(o==='1'); })();
+
+  const DIRS=[['dRandom','random'],['dLR','lr'],['dBounce','bounce'],['dOff','off']];
+  const dPaint=()=>DIRS.forEach(([id,v])=>$(id).setAttribute('aria-pressed',String(P.dir===v)));
+  const dSet=(d)=>{ P.dir=d; store('dir',d); idleT0=-1; lastPass=-1; dPaint(); };
+  try{ const v=localStorage.getItem('light.v9.dir'); if(v) P.dir=v; }catch(e){}
+  DIRS.forEach(([id,v])=>$(id).addEventListener('click',()=>dSet(v)));
+  dPaint();
+
+  $('uReset').addEventListener('click',()=>{
+    Object.assign(P,DEFAULTS);
+    UI.forEach(([k])=>store(k,DEFAULTS[k]));
+    store('mode',DEFAULTS.mode); store('dir',DEFAULTS.dir); store('q','auto');
+    autoQ=true; idleT0=-1; lastPass=-1; qPaint(); dPaint(); paint();
+  });
+  paint();
+
+  /* ---------------- loop ---------------- */
+  const t0=performance.now();
+  let last=t0, ft=0, fc=0, good=0;
+  let lastDraw=0;
+  const frame=(now)=>{
+    requestAnimationFrame(frame);
+    if(!W||!H){ resize(); if(!W||!H) return; }
+    sync(now);
+    if(!fluid || !onScreen){ last=now; return; }
+
+    const budget=1000/TIERS[tier].fps-1;
+    if(now-lastDraw<budget) return;          // Low runs the field at 30
+    lastDraw=now;
+
+    const raw=now-last;
+    const dt=Math.min(raw/1000,0.016)||0.016; last=now;
+    const t=(now-t0)/1000;
+
+    // rolling frame time, and step the tier when it stays out of range
+    if(raw>0 && raw<400){ ft=ft?ft*0.92+raw*0.08:raw; }
+    if(++fc>=30){
+      fc=0; $('vFps').textContent=ft?Math.round(ft)+' ms':'—';
+      if(autoQ && ft){
+        if(ft>21 && tier>0){ setTier(tier-1); good=0; }
+        else if(ft<13 && tier<2){ if(++good>=4){ setTier(tier+1); good=0; } }
+        else good=0;
+      }
+    }
+
+    // idle: cross the sign on its own, at whatever the sliders say
+    if(P.dir!=='off' && (now-lastInput)>(everMoved?P.wait:700)){
+      if(idleT0<0){ idleT0=now; lastPass=-1; }
+      const CROSS=P.cross, LEG=CROSS+P.gap;
+      const span=(P.dir==='bounce')?LEG*2:LEG;
+      const e=(now-idleT0)%span, pass=Math.floor((now-idleT0)/span);
+      const ease=(u)=>u<0.5?2*u*u:1-Math.pow(-2*u+2,2)/2;
+
+      if(pass!==lastPass){
+        lastPass=pass;
+        if(P.dir!=='bounce') M.seen=false;          // no velocity spike on re-entry
+        if(P.dir==='random'){                       // a fresh diagonal every pass
+          const sp=P.spread/100, c=P.line/100, s=Math.random()<0.5?1:-1;
+          leg.ax = s>0?-0.16:1.16;  leg.bx = s>0?1.16:-0.16;
+          leg.ay = c+(Math.random()-0.5)*sp;
+          leg.by = c+(Math.random()-0.5)*sp;
+        }
+      }
+
+      let x=null,y=P.line/100;
+      if(e<CROSS){
+        const k=ease(e/CROSS);
+        if(P.dir==='random'){ x=leg.ax+(leg.bx-leg.ax)*k; y=leg.ay+(leg.by-leg.ay)*k; }
+        else { x=-0.16+1.32*k; if(P.dir==='lr') y+=0.05*Math.sin(pass*1.7); }
+      } else if(P.dir==='bounce' && e>=LEG && e<LEG+CROSS){
+        x=1.16-1.32*ease((e-LEG)/CROSS);            // and back again
+      }
+      if(x!==null){
+        const r=stage.getBoundingClientRect();
+        onMove(r.left+r.width*x, r.top+r.height*Math.max(0.02,Math.min(0.98,y)));
+      }
+      lastInput=-1e9;                        // stay in idle
+    }
+
+    if(M.moved){ fluid.splat(M.x,M.y,M.vx,M.vy); M.moved=false; }
+    fluid.simulate(dt);
+    fluid.render(inner, videoDirty);
+    if(HAS_RVFC) videoDirty=false;
+
+    rx.textContent=(100*M.x/(W*dpr)).toFixed(1);
+    ry.textContent=(100*M.y/(H*dpr)).toFixed(1);
+    rf.textContent=Math.hypot(M.vx,M.vy).toFixed(0);
+  };
+  requestAnimationFrame(frame);
+
+  /* ---------- the page below fades up as it comes into view ---------- */
+  const io=new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  },{rootMargin:'0px 0px -12% 0px',threshold:0.12});
+  document.querySelectorAll('.reveal').forEach((el,i)=>{
+    el.style.transitionDelay=(i%3)*90+'ms';
+    io.observe(el);
+  });
+  addEventListener('scroll',()=>{
+    document.body.classList.toggle('scrolled',scrollY>40);
+  },{passive:true});
+})();
+</script>
