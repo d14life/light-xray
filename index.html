@@ -56,6 +56,18 @@
   @keyframes drop{0%,100%{opacity:.25;transform:scaleY(.6)}50%{opacity:1;transform:scaleY(1)}}
   body.scrolled .scroll-cue{opacity:0}
 
+
+  /* ---------- the assembly runway: scroll scrubs 120 stills ---------- */
+  .runway{height:420vh;position:relative}
+  .rstage{position:sticky;top:0;height:100svh;display:flex;align-items:center;
+          justify-content:center;background:var(--void)}
+  .rstage canvas{width:min(96vw,1180px,calc(56svh * 16 / 9));aspect-ratio:16/9;
+                 display:block;background:#000}
+  .rhint{position:absolute;left:50%;bottom:7vh;transform:translateX(-50%);
+         font-family:var(--mono);font-size:.625rem;letter-spacing:.24em;
+         text-transform:uppercase;color:var(--steel-dim);transition:opacity .4s}
+  .rhint.gone{opacity:0}
+
   /* ---------- the tuning strip: shut until you want it ---------- */
   .tune{width:min(96vw,1180px,calc(56svh * 16 / 9));font-family:var(--mono);font-size:.625rem;
         letter-spacing:.18em;text-transform:uppercase}
@@ -145,6 +157,13 @@
   <div class="boot-bar"><i id="bootBar"></i></div>
   <p class="boot-note" id="bootNote">Loading 0%</p>
 </div>
+
+<section class="runway" id="runway">
+  <div class="rstage">
+    <canvas id="asm" width="1920" height="1080"></canvas>
+    <p class="rhint" id="rhint">Scroll to assemble</p>
+  </div>
+</section>
 
 <section class="hero">
   <header class="masthead">
@@ -1062,5 +1081,56 @@ function createFluid(canvas){
   addEventListener('scroll',()=>{
     document.body.classList.toggle('scrolled',scrollY>40);
   },{passive:true});
+})();
+</script>
+<script>
+/* ---------------- the assembly scrub ----------------
+   Stills rather than a <video>: a seek on 4K costs hundreds of ms, an already
+   decoded image costs nothing, so the scrub tracks the scroll exactly. The
+   last frame is pre-framed to match the live loop below it. */
+(() => {
+  const $=(id)=>document.getElementById(id);
+  const cv=$('asm'), runway=$('runway'), hint=$('rhint');
+  if(!cv||!runway) return;
+  const ctx=cv.getContext('2d',{alpha:false});
+  const COUNT=120;
+  const SRC=(i)=>'assembly-frames/asm_'+String(i+1).padStart(3,'0')+'.jpg';
+  const frames=new Array(COUNT);
+  let ready=0, shown=-1;
+
+  for(let i=0;i<COUNT;i++){
+    const img=new Image();
+    img.decoding='async';
+    img.onload=()=>{ frames[i]=img; if(++ready===1) paint(0); };
+    img.src=SRC(i);
+  }
+  const paint=(i)=>{
+    const img=frames[i];
+    if(!img || i===shown) return;
+    shown=i;
+    ctx.drawImage(img,0,0,cv.width,cv.height);
+  };
+  const nearest=(i)=>{                    // hold the last decoded frame while loading
+    for(let d=0;d<COUNT;d++){
+      if(frames[i-d]) return i-d;
+      if(frames[i+d]) return i+d;
+    }
+    return -1;
+  };
+  let raf=0;
+  const onScroll=()=>{
+    if(raf) return;
+    raf=requestAnimationFrame(()=>{
+      raf=0;
+      const span=runway.offsetHeight-innerHeight;
+      const p=span>0 ? Math.min(1,Math.max(0,scrollY/span)) : 0;
+      const i=nearest(Math.round(p*(COUNT-1)));
+      if(i>=0) paint(i);
+      if(hint) hint.classList.toggle('gone', p>0.04);
+    });
+  };
+  addEventListener('scroll',onScroll,{passive:true});
+  addEventListener('resize',onScroll,{passive:true});
+  onScroll();
 })();
 </script>
